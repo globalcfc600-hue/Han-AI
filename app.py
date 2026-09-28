@@ -3,20 +3,13 @@ import requests
 import time
 import re
 import base64
+from googlesearch import search
+from bs4 import BeautifulSoup
 
-st.set_page_config(page_title="HAN AI", layout="centered")
-
-if "github_hafizasi" not in st.session_state:
-    st.session_state.github_hafizasi = []
-
-if "ogrenilen_kavramlar" not in st.session_state:
-    st.session_state.ogrenilen_kavramlar = {}
+st.set_page_config(page_title="HAN AI 2", layout="centered")
 
 if "sohbet_gecmisi" not in st.session_state:
     st.session_state.sohbet_gecmisi = []
-
-if "son_tarama_zamani" not in st.session_state:
-    st.session_state.son_tarama_zamani = 0
 
 if "yazilim_modu" not in st.session_state:
     st.session_state.yazilim_modu = False
@@ -24,36 +17,20 @@ if "yazilim_modu" not in st.session_state:
 
 class DinamikNLPMotoru:
     def __init__(self):
-        self.durak_kelimeler = {"ve", "veya", "bir", "bu", "şu", "için", "ile", "ne", "nasıl", "nedir", "mi", "mı", "de", "da", "bana", "ver", "kodu", "kodunu", "bul", "getir"}
-        self.spam_kelimeler = {"test", "asdf", "qwerty", "1234", "null", "undefined", "foo", "bar"}
+        self.durak_kelimeler = {
+            "ve", "veya", "bir", "bu", "şu", "için", "ile", "ne", "nasıl", "nedir", 
+            "mi", "mı", "de", "da", "bana", "ver", "kodu", "kodunu", "bul", "getir", 
+            "kanka", "bro", "hocam", "reis", "lan", "ya", "söyle", "anlat"
+        }
 
     def metin_temizle(self, metin):
         metin = metin.lower()
         metin = re.sub(r'[^\w\s]', '', metin)
         tokens = metin.split()
-        return [t for t in tokens if t not in self.durak_kelimeler]
+        temiz = [t for t in tokens if t not in self.durak_kelimeler]
+        return temiz if temiz else tokens
 
-    def spam_mi(self, metin):
-        metin_alt = metin.lower()
-        if len(metin_alt.strip()) < 3 or any(s in metin_alt for s in self.spam_kelimeler):
-            return True
-        return False
-
-    def veri_egit(self, repo_listesi):
-        for repo in repo_listesi:
-            ad = repo.get("ad", "").lower()
-            aciklama = repo.get("aciklama", "").lower()
-            if self.spam_mi(aciklama) or self.spam_mi(ad):
-                continue
-            kelimeler = self.metin_temizle(aciklama)
-            for k in kelimeler:
-                if len(k) > 2 and not k.isdigit():
-                    if k not in st.session_state.ogrenilen_kavramlar:
-                        st.session_state.ogrenilen_kavramlar[k] = []
-                    if repo not in st.session_state.ogrenilen_kavramlar[k]:
-                        st.session_state.ogrenilen_kavramlar[k].append(repo)
-
-    def github_kod_icerigi_cek(self, repo_full_name):
+    def github_tum_kodlari_cek(self, repo_full_name):
         headers = {"Accept": "application/vnd.github.v3+json"}
         url = f"https://api.github.com/repos/{repo_full_name}/readme"
         try:
@@ -61,27 +38,114 @@ class DinamikNLPMotoru:
             if res.status_code == 200:
                 content_b64 = res.json().get("content", "")
                 decoded = base64.b64decode(content_b64).decode("utf-8", errors="ignore")
-                return decoded[:1500] + "\n\n...[Kodun Devamı GitHub Adresinde]..." if len(decoded) > 1500 else decoded
+                return decoded
         except Exception:
             pass
-        return "Kod içeriği çekilemedi, bağlantıdan inceleyebilirsiniz."
+        return "Kod içeriği çekilemedi, bağlantı üzerinden inceleyebilirsiniz."
 
-    def github_kod_ara_coklu(self, sorgu_kelimesi, adet=2):
-        url = f"https://api.github.com/search/repositories?q={sorgu_kelimesi}&sort=updated&order=desc&per_page={adet}"
-        headers = {"Accept": "application/vnd.github.v3+json"}
-        sonuclar = []
+    def yazilim_modu_ara_ve_getir(self, sorgu_metni):
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        
+        # 1. Aşama: Google genel araması ve ilk çıkan URL'nin açıklamasını alma
+        ilk_url_aciklamasi = "Google araması üzerinden açıklama alınamadı."
         try:
-            res = requests.get(url, headers=headers, timeout=10)
-            if res.status_code == 200:
-                items = res.json().get("items", [])
-                for item in items[:adet]:
-                    repo_adi = item.get("full_name")
-                    kod_icerik = self.github_kod_icerigi_cek(repo_adi)
+            genel_urls = list(search(sorgu_metni, num_results=1, lang="tr"))
+            if genel_urls:
+                ilk_url = genel_urls[0]
+                res = requests.get(ilk_url, headers=headers, timeout=4)
+                if res.status_code == 200:
+                    soup = BeautifulSoup(res.text, "html.parser")
+                    paragraflar = [p.get_text().strip() for p in soup.find_all("p") if len(p.get_text().strip()) > 30]
+                    if paragraflar:
+                        ilk_url_aciklamasi = paragraflar[0]
+                        if len(ilk_url_aciklamasi) > 300:
+                            ilk_url_aciklamasi = ilk_url_aciklamasi[:300] + "..."
+        except Exception:
+            pass
+
+        # 2. Aşama: Google üzerinden 2 adet ilgili GitHub reposu tespit etme
+        google_github_sorgu = f"site:github.com {sorgu_metni} python"
+        bulunan_repolar = []
+        try:
+            github_urls = list(search(google_github_sorgu, num_results=5, lang="en"))
+            for url in github_urls:
+                match = re.search(r'github\.com/([^/]+/[^/]+)', url)
+                if match:
+                    repo_adi = match.group(1).rstrip('/')
+                    if repo_adi not in bulunan_repolar and not repo_adi.endswith('.git'):
+                        bulunan_repolar.append(repo_adi)
+                if len(bulunan_repolar) >= 2:
+                    break
+        except Exception:
+            pass
+
+        # Yedek: Google'dan 2 repo çıkmazsa GitHub API ile tamamla
+        if len(bulunan_repolar) < 2:
+            api_url = f"https://api.github.com/search/repositories?q={sorgu_metni}&sort=updated&order=desc&per_page=2"
+            try:
+                res = requests.get(api_url, headers={"Accept": "application/vnd.github.v3+json"}, timeout=5)
+                if res.status_code == 200:
+                    items = res.json().get("items", [])
+                    for item in items:
+                        repo_adi = item.get("full_name")
+                        if repo_adi not in bulunan_repolar:
+                            bulunan_repolar.append(repo_adi)
+                        if len(bulunan_repolar) >= 2:
+                            break
+            except Exception:
+                pass
+
+        # 3. Aşama: Yanıt oluşturma
+        cevap = "Elbete Hemen Bakalım Size Detayları Ve Kodları Vericeğim\n\n"
+        cevap += f"**Google Arama Analizi & Açıklama:**\n{ilk_url_aciklamasi}\n\n"
+        cevap += "---\n\n"
+
+        if bulunan_repolar:
+            cevap += f"### Bulunan GitHub Kod Projeleri ({len(bulunan_repolar)} Adet):\n\n"
+            for i, repo_adi in enumerate(bulunan_repolar, 1):
+                tum_kodlar = self.github_tum_kodlari_cek(repo_adi)
+                repo_url = f"https://github.com/{repo_adi}"
+                
+                cevap += f"#### {i}. Proje Başlığı: {repo_adi}\n"
+                cevap += f"**GitHub Bağlantısı:** [{repo_url}]({repo_url})\n"
+                cevap += f"**Proje Bütün Kodları & İçeriği:**\n```python\n{tum_kodlar}\n```\n\n---\n"
+        else:
+            cevap += f"Maalesef '{sorgu_metni}' konusuyla ilgili uygun bir GitHub reposu bulunamadı."
+
+        return cevap
+
+    def normal_google_ara(self, sorgu, adet=2):
+        temiz_kelimeler = self.metin_temizle(sorgu)
+        arama_sorgusu = " ".join(temiz_kelimeler) if temiz_kelimeler else sorgu
+        
+        sonuclar = []
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        
+        try:
+            urls = list(search(arama_sorgusu, num_results=adet, lang="tr"))
+            
+            for url in urls[:adet]:
+                try:
+                    res = requests.get(url, headers=headers, timeout=4)
+                    if res.status_code == 200:
+                        soup = BeautifulSoup(res.text, "html.parser")
+                        baslik = soup.title.string if soup.title else url
+                        
+                        paragraflar = [p.get_text().strip() for p in soup.find_all("p") if len(p.get_text().strip()) > 30]
+                        ozet = " ".join(paragraflar[:2]) if paragraflar else "İçerik özeti alınamadı."
+                        if len(ozet) > 300:
+                            ozet = ozet[:300] + "..."
+                        
+                        sonuclar.append({
+                            "baslik": baslik.strip(),
+                            "url": url,
+                            "ozet": ozet
+                        })
+                except Exception:
                     sonuclar.append({
-                        "ad": repo_adi,
-                        "aciklama": item.get("description") or "Açıklama yok.",
-                        "url": item.get("html_url"),
-                        "kod": kod_icerik
+                        "baslik": url,
+                        "url": url,
+                        "ozet": "Açıklama önizlemesi alınamadı."
                     })
         except Exception:
             pass
@@ -92,93 +156,44 @@ class DinamikNLPMotoru:
 
         if girdi_temiz in ["yazılım", "yazilim"]:
             st.session_state.yazilim_modu = True
-            return "HAN AI Yazılım Modu { Gizli Mod Açıldı }"
+            return "HAN AI 2 Yazılım Modu { Gizli Mod Açıldı }"
 
         if girdi_temiz in ["normal", "çıkış", "cikis", "kapat"]:
             st.session_state.yazilim_modu = False
             return "Normal Moda Geçildi."
 
+        # YAZILIM MODU
         if st.session_state.yazilim_modu:
-            kelimeler = self.metin_temizle(girdi)
-            sorgu_metni = "+".join(kelimeler) if kelimeler else girdi_temiz
-            sonuclar = self.github_kod_ara_coklu(sorgu_metni, adet=2)
+            temiz_kelimeler = self.metin_temizle(girdi)
+            sorgu_metni = " ".join(temiz_kelimeler)
+            return self.yazilim_modu_ara_ve_getir(sorgu_metni)
 
-            if sonuclar:
-                cevap = f"### GitHub'dan Bulunan Kod Örnekleri ({len(sonuclar)} Adet):\n\n"
-                for i, item in enumerate(sonuclar, 1):
-                    cevap += f"#### Örnek {i}: {item['ad']}\n"
-                    cevap += f"**Açıklama:** {item['aciklama']}\n"
-                    cevap += f"**Kod / İçerik:**\n```python\n{item['kod']}\n```\n"
-                    cevap += f"**URL:** [{item['url']}]({item['url']})\n\n---\n"
-                return cevap
-            else:
-                return f"GitHub üzerinde '{sorgu_metni}' aramasıyla ilgili doğrudan bir kod örneği bulunamadı."
-
+        # NORMAL SOHBET MODU
         kelimeler = self.metin_temizle(girdi)
         selamlar = {"selam", "merhaba", "gunaydin", "iyi", "gunler", "naber", "nasilsin", "sa"}
         
         if set(kelimeler).intersection(selamlar):
             return "Merhaba! İyiyim, teşekkür ederim. Size nasıl yardımcı olabilirim?"
 
-        if not st.session_state.github_hafizasi:
-            gecen = int(time.time() - st.session_state.son_tarama_zamani)
-            kalan = max(1, 10 - gecen)
-            return f"Mantık Motoru Yükleniyor Lütfen Bekle _ {kalan}s"
-
-        eslesen = []
-        for k in kelimeler:
-            if k in st.session_state.ogrenilen_kavramlar:
-                eslesen.extend(st.session_state.ogrenilen_kavramlar[k])
-
-        if eslesen:
-            en_yakin = eslesen[-1]
-            return f"Öğrendiğim kadarıyla ilgili proje: **{en_yakin['ad']}**\n\nAçıklama: {en_yakin['aciklama']}\nAdres: {en_yakin['url']}"
+        google_sonuclari = self.normal_google_ara(girdi, adet=2)
+        
+        if google_sonuclari:
+            cevap = "Google verilerine dayanarak bulduğum sonuçlar:\n\n"
+            for i, item in enumerate(google_sonuclari, 1):
+                cevap += f"**{i}. {item['baslik']}**\n"
+                cevap += f"{item['ozet']}\n"
+                cevap += f"Kaynak: [{item['url']}]({item['url']})\n\n"
+            return cevap
         else:
-            son_veri = st.session_state.github_hafizasi[-1]
-            return f"Aradığınız kavrama tam ulaşamadım ama son öğrendiğim proje: **{son_veri['ad']}** - {son_veri['aciklama']}"
+            return f"Google üzerinde '{girdi}' sorgusu için doğrudan bir yanıt çekilemedi."
 
 
 motor = DinamikNLPMotoru()
 
+st.title("HAN AI 2")
 
-def github_veri_cek():
-    su_an = time.time()
-    if st.session_state.son_tarama_zamani == 0:
-        st.session_state.son_tarama_zamani = su_an
-
-    if len(st.session_state.github_hafizasi) == 0 or (su_an - st.session_state.son_tarama_zamani >= 10):
-        st.session_state.son_tarama_zamani = su_an
-        url = "https://api.github.com/search/repositories?q=topic:ai+topic:chat+topic:python&sort=updated&order=desc&per_page=5"
-        headers = {"Accept": "application/vnd.github.v3+json"}
-        try:
-            res = requests.get(url, headers=headers, timeout=5)
-            if res.status_code == 200:
-                items = res.json().get("items", [])
-                yeni_repolar = []
-                for item in items:
-                    repo = {
-                        "ad": item.get("full_name"),
-                        "aciklama": item.get("description") or "Açıklama yok",
-                        "url": item.get("html_url")
-                    }
-                    yeni_repolar.append(repo)
-                    st.session_state.github_hafizasi.append(repo)
-                motor.veri_egit(yeni_repolar)
-        except Exception:
-            pass
-
-
-github_veri_cek()
-
-st.title("HAN AI")
-
-gecen_sure = int(time.time() - st.session_state.son_tarama_zamani)
-if len(st.session_state.github_hafizasi) == 0:
-    kalan_sure = max(1, 10 - gecen_sure)
-    st.caption(f"Mantık Motoru Yükleniyor Lütfen Bekle _ {kalan_sure}s")
-else:
-    mod_etiketi = " [Yazılım Modu]" if st.session_state.yazilim_modu else ""
-    st.caption(f"Sistem Hazır{mod_etiketi}")
+mod_etiketi = " [Yazılım Modu]" if st.session_state.yazilim_modu else ""
+st.caption(f"Yerli Ve Milli NLP Tabanlı Yapay Zeka Sistem Altyapısı Ücretsiz | Yazılım HAN AI Tarafından{mod_etiketi}")
 
 st.divider()
 
@@ -189,11 +204,11 @@ with sohbet_alani:
         with st.chat_message(mesaj["rol"]):
             st.write(mesaj["icerik"])
 
-if kullanici_input := st.chat_input("Bir şeyler yazın... (Örn: merhaba, yazılım)"):
+if kullanici_input := st.chat_input("HAN AI POWER OF TECHNOLOGY"):
     st.session_state.sohbet_gecmisi.append({"rol": "user", "icerik": kullanici_input})
     
     with st.spinner("Anlamaya Çalışıyorum..."):
-        time.sleep(0.6)
+        time.sleep(0.5)
         bot_cevabi = motor.yanit_uret(kullanici_input)
         
     st.session_state.sohbet_gecmisi.append({"rol": "assistant", "icerik": bot_cevabi})
