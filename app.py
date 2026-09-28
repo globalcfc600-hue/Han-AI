@@ -3,9 +3,11 @@ import requests
 import time
 import re
 import base64
-import urllib.parse
 
 st.set_page_config(page_title="HAN AI 2", layout="centered")
+
+# TAVILY API KEY
+TAVILY_API_KEY = "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"
 
 if "sohbet_gecmisi" not in st.session_state:
     st.session_state.sohbet_gecmisi = []
@@ -29,39 +31,28 @@ class DinamikNLPMotoru:
         temiz = [t for t in tokens if t not in self.durak_kelimeler]
         return temiz if temiz else tokens
 
-    def saf_web_ara(self, sorgu, adet=3):
-        """Kütüphane gerektirmeyen, doğrudan HTTP isteği ve Regex ile çalışan web arama motoru"""
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    def canlı_google_ara(self, sorgu, adet=3):
+        """Render IP engeline takılmayan Tavily AI Arama Motoru"""
+        url = "[https://api.tavily.com/search](https://api.tavily.com/search)"
+        payload = {
+            "api_key": TAVILY_API_KEY,
+            "query": sorgu,
+            "max_results": adet,
+            "search_depth": "basic"
         }
-        url = "https://html.duckduckgo.com/html/"
         sonuclar = []
 
         try:
-            res = requests.post(url, data={"q": sorgu}, headers=headers, timeout=6)
+            res = requests.post(url, json=payload, timeout=6)
             if res.status_code == 200:
-                raw_matches = re.findall(
-                    r'<a class="result__url" href="([^"]+)">(.*?)</a>.*?<a class="result__snippet[^"]*">(.*?)</a>',
-                    res.text,
-                    re.DOTALL
-                )
-
-                for raw_link, raw_title, raw_snippet in raw_matches[:adet]:
-                    clean_title = re.sub(r'<[^>]+>', '', raw_title).strip()
-                    clean_snippet = re.sub(r'<[^>]+>', '', raw_snippet).strip()
-
-                    actual_url = raw_link
-                    if "uddg=" in raw_link:
-                        match = re.search(r'uddg=([^&]+)', raw_link)
-                        if match:
-                            actual_url = urllib.parse.unquote(match.group(1))
-
-                    if clean_title:
-                        sonuclar.append({
-                            "baslik": clean_title,
-                            "url": actual_url,
-                            "ozet": clean_snippet if clean_snippet else "Açıklama bulunamadı."
-                        })
+                data = res.json()
+                results = data.get("results", [])
+                for item in results:
+                    sonuclar.append({
+                        "baslik": item.get("title", "Arama Sonucu"),
+                        "url": item.get("url", "#"),
+                        "ozet": item.get("content", "Açıklama bulunamadı.")
+                    })
         except Exception:
             pass
 
@@ -70,7 +61,7 @@ class DinamikNLPMotoru:
     def github_tum_kodlari_cek(self, repo_full_name):
         """GitHub API üzerinden reponun README/Kod içeriğini çeker"""
         headers = {"Accept": "application/vnd.github.v3+json"}
-        url = f"https://api.github.com/repos/{repo_full_name}/readme"
+        url = f"[https://api.github.com/repos/](https://api.github.com/repos/){repo_full_name}/readme"
         try:
             res = requests.get(url, headers=headers, timeout=5)
             if res.status_code == 200:
@@ -84,17 +75,17 @@ class DinamikNLPMotoru:
     def yazilim_modu_ara_ve_getir(self, sorgu_metni):
         """Web Arama Analizi + GitHub API projelerini ve kodlarını sunar"""
         headers = {"Accept": "application/vnd.github.v3+json"}
-        api_url = f"https://api.github.com/search/repositories?q={sorgu_metni}&sort=stars&order=desc&per_page=2"
+        api_url = f"[https://api.github.com/search/repositories?q=](https://api.github.com/search/repositories?q=){sorgu_metni}&sort=stars&order=desc&per_page=2"
         
         bulunan_repolar = []
         ilk_url_aciklamasi = "Arama analizi tamamlandı."
 
-        # Web araması ile özet analizi alma
-        web_ozet = self.saf_web_ara(sorgu_metni, adet=1)
+        # Tavily API ile canlı web araması ve detaylı özet analizi
+        web_ozet = self.canlı_google_ara(sorgu_metni, adet=1)
         if web_ozet:
             ilk_url_aciklamasi = web_ozet[0]["ozet"]
 
-        # GitHub API ile repoları bulma
+        # GitHub API ile projeleri bulma
         try:
             res = requests.get(api_url, headers=headers, timeout=6)
             if res.status_code == 200:
@@ -132,7 +123,7 @@ class DinamikNLPMotoru:
             st.session_state.yazilim_modu = True
             return "HAN AI 2 Yazılım Modu { Gizli Mod Açıldı }"
 
-        # Mod Çıkış (İstediğin şekilde)
+        # Mod Çıkış
         if girdi_temiz in ["yazılım_exit", "yazilim_exit"]:
             st.session_state.yazilim_modu = False
             return "Normal Moda Geçildi."
@@ -150,7 +141,7 @@ class DinamikNLPMotoru:
         if set(kelimeler).intersection(selamlar):
             return "Merhaba! İyiyim, teşekkür ederim. Size nasıl yardımcı olabilirim?"
 
-        arama_sonuclari = self.saf_web_ara(girdi, adet=3)
+        arama_sonuclari = self.canlı_google_ara(girdi, adet=3)
         
         if arama_sonuclari:
             cevap = "Arama verilerine dayanarak bulduğum sonuçlar:\n\n"
