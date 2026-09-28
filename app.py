@@ -3,6 +3,7 @@ import requests
 import time
 import re
 import base64
+from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="HAN AI 2", layout="centered")
 
@@ -28,40 +29,42 @@ class DinamikNLPMotoru:
         temiz = [t for t in tokens if t not in self.durak_kelimeler]
         return temiz if temiz else tokens
 
-    def kutuphanesiz_web_ara(self, sorgu_metni):
-        """Kütüphane kullanmadan doğrudan DuckDuckGo Instant Answer API üzerinden veri çeker"""
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        api_url = f"https://api.duckduckgo.com/?q={sorgu_metni}&format=json&no_redirect=1&no_html=1"
-        
+    def google_web_ara(self, sorgu, adet=3):
+        """Doğrudan Google HTML üzerinden canlı ve gerçek arama sonuçlarını çeker"""
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        }
+        url = f"https://www.google.com/search?q={sorgu}&hl=tr"
         sonuclar = []
+
         try:
-            res = requests.get(api_url, headers=headers, timeout=5)
+            res = requests.get(url, headers=headers, timeout=6)
             if res.status_code == 200:
-                data = res.json()
-                
-                # Abstract (Özet bilgi) varsa ekle
-                if data.get("AbstractText"):
-                    sonuclar.append({
-                        "baslik": data.get("Heading", sorgu_metni),
-                        "ozet": data.get("AbstractText"),
-                        "url": data.get("AbstractURL", "")
-                    })
-                
-                # İlgili Konular (Related Topics)
-                for topic in data.get("RelatedTopics", [])[:3]:
-                    if "Text" in topic and "FirstURL" in topic:
-                        sonuclar.append({
-                            "baslik": topic.get("Text").split(" - ")[0] if " - " in topic.get("Text") else "İlgili Sonuç",
-                            "ozet": topic.get("Text"),
-                            "url": topic.get("FirstURL")
-                        })
+                soup = BeautifulSoup(res.text, "html.parser")
+                g_blocks = soup.find_all("div", class_="g")
+
+                for g in g_blocks:
+                    h3 = g.find("h3")
+                    a_tag = g.find("a")
+                    snippet = g.find("div", class_="VwiC3b")
+
+                    if h3 and a_tag and a_tag.get("href"):
+                        baslik = h3.get_text()
+                        link = a_tag["href"]
+                        ozet = snippet.get_text() if snippet else "Açıklama bulunamadı."
+
+                        if link.startswith("http"):
+                            sonuclar.append({"baslik": baslik, "url": link, "ozet": ozet})
+
+                    if len(sonuclar) >= adet:
+                        break
         except Exception:
             pass
-            
+
         return sonuclar
 
     def github_tum_kodlari_cek(self, repo_full_name):
-        """GitHub API üzerinden reponun README/Kod içeriğini çeker"""
+        """GitHub API üzerinden reponun README veya kod yapısını çeker"""
         headers = {"Accept": "application/vnd.github.v3+json"}
         url = f"https://api.github.com/repos/{repo_full_name}/readme"
         try:
@@ -72,26 +75,27 @@ class DinamikNLPMotoru:
                 return decoded
         except Exception:
             pass
-        return "Kod içeriği çekilemedi, bağlantı üzerinden inceleyebilirsiniz."
+        return "Kod/README içeriği doğrudan çekilemedi, proje bağlantısı üzerinden inceleyebilirsiniz."
 
     def yazilim_modu_ara_ve_getir(self, sorgu_metni):
+        """GitHub API üzerinden en alakalı 2 repoyu ve kodlarını getirir"""
         headers = {"Accept": "application/vnd.github.v3+json"}
-        api_url = f"https://api.github.com/search/repositories?q={sorgu_metni}&sort=updated&order=desc&per_page=2"
+        api_url = f"https://api.github.com/search/repositories?q={sorgu_metni}&sort=stars&order=desc&per_page=2"
         
         bulunan_repolar = []
-        ilk_url_aciklamasi = "Açıklama bulunamadı."
+        ilk_url_aciklamasi = "Arama analizi tamamlandı."
 
-        # Web üzerinden genel bilgi özetini kütüphanesiz çekelim
-        web_sonuclari = self.kutuphanesiz_web_ara(sorgu_metni)
-        if web_sonuclari:
-            ilk_url_aciklamasi = web_sonuclari[0]["ozet"]
+        # Google'dan kısa özet analiz alma
+        google_ozet = self.google_web_ara(sorgu_metni, adet=1)
+        if google_ozet:
+            ilk_url_aciklamasi = google_ozet[0]["ozet"]
 
-        # GitHub API üzerinden repoları alalım
+        # GitHub araması
         try:
-            res = requests.get(api_url, headers=headers, timeout=5)
+            res = requests.get(api_url, headers=headers, timeout=6)
             if res.status_code == 200:
                 items = res.json().get("items", [])
-                for item in items[:2]:
+                for item in items:
                     repo_adi = item.get("full_name")
                     if repo_adi:
                         bulunan_repolar.append(repo_adi)
@@ -119,12 +123,12 @@ class DinamikNLPMotoru:
     def yanit_uret(self, girdi):
         girdi_temiz = girdi.strip().lower()
 
-        # Yazılım Moduna Giriş
+        # Mod Giriş
         if girdi_temiz in ["yazılım", "yazilim"]:
             st.session_state.yazilim_modu = True
             return "HAN AI 2 Yazılım Modu { Gizli Mod Açıldı }"
 
-        # Yazılım Modundan Çıkış
+        # Mod Çıkış
         if girdi_temiz in ["yazılım_exit", "yazilim_exit"]:
             st.session_state.yazilim_modu = False
             return "Normal Moda Geçildi."
@@ -142,18 +146,17 @@ class DinamikNLPMotoru:
         if set(kelimeler).intersection(selamlar):
             return "Merhaba! İyiyim, teşekkür ederim. Size nasıl yardımcı olabilirim?"
 
-        arama_sonuclari = self.kutuphanesiz_web_ara(girdi)
+        arama_sonuclari = self.google_web_ara(girdi, adet=3)
         
         if arama_sonuclari:
-            cevap = "Arama verilerine dayanarak bulduğum sonuçlar:\n\n"
+            cevap = "Google Arama verilerine dayanarak bulduğum sonuçlar:\n\n"
             for i, item in enumerate(arama_sonuclari, 1):
                 cevap += f"**{i}. {item['baslik']}**\n"
                 cevap += f"{item['ozet']}\n"
-                if item['url']:
-                    cevap += f"Kaynak: [{item['url']}]({item['url']})\n\n"
+                cevap += f"Kaynak: [{item['url']}]({item['url']})\n\n"
             return cevap
         else:
-            return f"'{girdi}' sorgusu için doğrudan bir bilgi çekilemedi."
+            return f"'{girdi}' sorgusu için canlı web araması üzerinden doğrudan sonuç çekilemedi."
 
 
 motor = DinamikNLPMotoru()
