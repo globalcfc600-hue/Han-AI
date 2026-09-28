@@ -3,8 +3,6 @@ import requests
 import time
 import re
 import base64
-from duckduckgo_search import DDGS
-from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="HAN AI 2", layout="centered")
 
@@ -30,7 +28,40 @@ class DinamikNLPMotoru:
         temiz = [t for t in tokens if t not in self.durak_kelimeler]
         return temiz if temiz else tokens
 
+    def kutuphanesiz_web_ara(self, sorgu_metni):
+        """Kütüphane kullanmadan doğrudan DuckDuckGo Instant Answer API üzerinden veri çeker"""
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        api_url = f"https://api.duckduckgo.com/?q={sorgu_metni}&format=json&no_redirect=1&no_html=1"
+        
+        sonuclar = []
+        try:
+            res = requests.get(api_url, headers=headers, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                
+                # Abstract (Özet bilgi) varsa ekle
+                if data.get("AbstractText"):
+                    sonuclar.append({
+                        "baslik": data.get("Heading", sorgu_metni),
+                        "ozet": data.get("AbstractText"),
+                        "url": data.get("AbstractURL", "")
+                    })
+                
+                # İlgili Konular (Related Topics)
+                for topic in data.get("RelatedTopics", [])[:3]:
+                    if "Text" in topic and "FirstURL" in topic:
+                        sonuclar.append({
+                            "baslik": topic.get("Text").split(" - ")[0] if " - " in topic.get("Text") else "İlgili Sonuç",
+                            "ozet": topic.get("Text"),
+                            "url": topic.get("FirstURL")
+                        })
+        except Exception:
+            pass
+            
+        return sonuclar
+
     def github_tum_kodlari_cek(self, repo_full_name):
+        """GitHub API üzerinden reponun README/Kod içeriğini çeker"""
         headers = {"Accept": "application/vnd.github.v3+json"}
         url = f"https://api.github.com/repos/{repo_full_name}/readme"
         try:
@@ -44,47 +75,29 @@ class DinamikNLPMotoru:
         return "Kod içeriği çekilemedi, bağlantı üzerinden inceleyebilirsiniz."
 
     def yazilim_modu_ara_ve_getir(self, sorgu_metni):
-        ilk_url_aciklamasi = "Arama üzerinden açıklama alınamadı."
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        api_url = f"https://api.github.com/search/repositories?q={sorgu_metni}&sort=updated&order=desc&per_page=2"
+        
         bulunan_repolar = []
+        ilk_url_aciklamasi = "Açıklama bulunamadı."
 
+        # Web üzerinden genel bilgi özetini kütüphanesiz çekelim
+        web_sonuclari = self.kutuphanesiz_web_ara(sorgu_metni)
+        if web_sonuclari:
+            ilk_url_aciklamasi = web_sonuclari[0]["ozet"]
+
+        # GitHub API üzerinden repoları alalım
         try:
-            with DDGS() as ddgs:
-                # 1. Aşama: Genel arama yapıp ilk sonucun özet açıklamalarını alma
-                genel_sonuclar = list(ddgs.text(sorgu_metni, max_results=1))
-                if genel_sonuclar:
-                    ilk_url_aciklamasi = genel_sonuclar[0].get("body", "Açıklama bulunamadı.")
-
-                # 2. Aşama: GitHub reponu tespit etme (2 adet)
-                github_sonuclar = list(ddgs.text(f"site:github.com {sorgu_metni} python", max_results=5))
-                for res in github_sonuclar:
-                    url = res.get("href", "")
-                    match = re.search(r'github\.com/([^/]+/[^/]+)', url)
-                    if match:
-                        repo_adi = match.group(1).rstrip('/')
-                        if repo_adi not in bulunan_repolar and not repo_adi.endswith('.git'):
-                            bulunan_repolar.append(repo_adi)
-                    if len(bulunan_repolar) >= 2:
-                        break
+            res = requests.get(api_url, headers=headers, timeout=5)
+            if res.status_code == 200:
+                items = res.json().get("items", [])
+                for item in items[:2]:
+                    repo_adi = item.get("full_name")
+                    if repo_adi:
+                        bulunan_repolar.append(repo_adi)
         except Exception:
             pass
 
-        # Yedek mekanizma: Eğer 2 repo bulunamadıysa GitHub API ile tamamla
-        if len(bulunan_repolar) < 2:
-            api_url = f"https://api.github.com/search/repositories?q={sorgu_metni}&sort=updated&order=desc&per_page=2"
-            try:
-                res = requests.get(api_url, headers={"Accept": "application/vnd.github.v3+json"}, timeout=5)
-                if res.status_code == 200:
-                    items = res.json().get("items", [])
-                    for item in items:
-                        repo_adi = item.get("full_name")
-                        if repo_adi not in bulunan_repolar:
-                            bulunan_repolar.append(repo_adi)
-                        if len(bulunan_repolar) >= 2:
-                            break
-            except Exception:
-                pass
-
-        # 3. Aşama: İstenen formattaki yanıtı oluşturma
         cevap = "Elbete Hemen Bakalım Size Detayları Ve Kodları Vericeğim\n\n"
         cevap += f"**Arama Analizi & Açıklama:**\n{ilk_url_aciklamasi}\n\n"
         cevap += "---\n\n"
@@ -103,21 +116,6 @@ class DinamikNLPMotoru:
 
         return cevap
 
-    def normal_google_ara(self, sorgu, adet=2):
-        sonuclar = []
-        try:
-            with DDGS() as ddgs:
-                ddg_sonuclar = list(ddgs.text(sorgu, max_results=adet))
-                for item in ddg_sonuclar:
-                    sonuclar.append({
-                        "baslik": item.get("title", ""),
-                        "url": item.get("href", ""),
-                        "ozet": item.get("body", "")
-                    })
-        except Exception:
-            pass
-        return sonuclar
-
     def yanit_uret(self, girdi):
         girdi_temiz = girdi.strip().lower()
 
@@ -131,30 +129,31 @@ class DinamikNLPMotoru:
             st.session_state.yazilim_modu = False
             return "Normal Moda Geçildi."
 
-        # YAZILIM MODU İŞLEYİŞİ
+        # YAZILIM MODU
         if st.session_state.yazilim_modu:
             temiz_kelimeler = self.metin_temizle(girdi)
             sorgu_metni = " ".join(temiz_kelimeler)
             return self.yazilim_modu_ara_ve_getir(sorgu_metni)
 
-        # NORMAL SOHBET MODU İŞLEYİŞİ
+        # NORMAL SOHBET MODU
         kelimeler = self.metin_temizle(girdi)
         selamlar = {"selam", "merhaba", "gunaydin", "iyi", "gunler", "naber", "nasilsin", "sa"}
         
         if set(kelimeler).intersection(selamlar):
             return "Merhaba! İyiyim, teşekkür ederim. Size nasıl yardımcı olabilirim?"
 
-        google_sonuclari = self.normal_google_ara(girdi, adet=2)
+        arama_sonuclari = self.kutuphanesiz_web_ara(girdi)
         
-        if google_sonuclari:
+        if arama_sonuclari:
             cevap = "Arama verilerine dayanarak bulduğum sonuçlar:\n\n"
-            for i, item in enumerate(google_sonuclari, 1):
+            for i, item in enumerate(arama_sonuclari, 1):
                 cevap += f"**{i}. {item['baslik']}**\n"
                 cevap += f"{item['ozet']}\n"
-                cevap += f"Kaynak: [{item['url']}]({item['url']})\n\n"
+                if item['url']:
+                    cevap += f"Kaynak: [{item['url']}]({item['url']})\n\n"
             return cevap
         else:
-            return f"Arama üzerinde '{girdi}' sorgusu için doğrudan bir yanıt çekilemedi."
+            return f"'{girdi}' sorgusu için doğrudan bir bilgi çekilemedi."
 
 
 motor = DinamikNLPMotoru()
