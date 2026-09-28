@@ -3,7 +3,7 @@ import requests
 import time
 import re
 import base64
-from bs4 import BeautifulSoup
+import urllib.parse
 
 st.set_page_config(page_title="HAN AI 2", layout="centered")
 
@@ -29,42 +29,46 @@ class DinamikNLPMotoru:
         temiz = [t for t in tokens if t not in self.durak_kelimeler]
         return temiz if temiz else tokens
 
-    def google_web_ara(self, sorgu, adet=3):
-        """Doğrudan Google HTML üzerinden canlı ve gerçek arama sonuçlarını çeker"""
+    def saf_web_ara(self, sorgu, adet=3):
+        """Kütüphane gerektirmeyen, doğrudan HTTP isteği ve Regex ile çalışan web arama motoru"""
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
-        url = f"https://www.google.com/search?q={sorgu}&hl=tr"
+        url = "https://html.duckduckgo.com/html/"
         sonuclar = []
 
         try:
-            res = requests.get(url, headers=headers, timeout=6)
+            res = requests.post(url, data={"q": sorgu}, headers=headers, timeout=6)
             if res.status_code == 200:
-                soup = BeautifulSoup(res.text, "html.parser")
-                g_blocks = soup.find_all("div", class_="g")
+                raw_matches = re.findall(
+                    r'<a class="result__url" href="([^"]+)">(.*?)</a>.*?<a class="result__snippet[^"]*">(.*?)</a>',
+                    res.text,
+                    re.DOTALL
+                )
 
-                for g in g_blocks:
-                    h3 = g.find("h3")
-                    a_tag = g.find("a")
-                    snippet = g.find("div", class_="VwiC3b")
+                for raw_link, raw_title, raw_snippet in raw_matches[:adet]:
+                    clean_title = re.sub(r'<[^>]+>', '', raw_title).strip()
+                    clean_snippet = re.sub(r'<[^>]+>', '', raw_snippet).strip()
 
-                    if h3 and a_tag and a_tag.get("href"):
-                        baslik = h3.get_text()
-                        link = a_tag["href"]
-                        ozet = snippet.get_text() if snippet else "Açıklama bulunamadı."
+                    actual_url = raw_link
+                    if "uddg=" in raw_link:
+                        match = re.search(r'uddg=([^&]+)', raw_link)
+                        if match:
+                            actual_url = urllib.parse.unquote(match.group(1))
 
-                        if link.startswith("http"):
-                            sonuclar.append({"baslik": baslik, "url": link, "ozet": ozet})
-
-                    if len(sonuclar) >= adet:
-                        break
+                    if clean_title:
+                        sonuclar.append({
+                            "baslik": clean_title,
+                            "url": actual_url,
+                            "ozet": clean_snippet if clean_snippet else "Açıklama bulunamadı."
+                        })
         except Exception:
             pass
 
         return sonuclar
 
     def github_tum_kodlari_cek(self, repo_full_name):
-        """GitHub API üzerinden reponun README veya kod yapısını çeker"""
+        """GitHub API üzerinden reponun README/Kod içeriğini çeker"""
         headers = {"Accept": "application/vnd.github.v3+json"}
         url = f"https://api.github.com/repos/{repo_full_name}/readme"
         try:
@@ -75,22 +79,22 @@ class DinamikNLPMotoru:
                 return decoded
         except Exception:
             pass
-        return "Kod/README içeriği doğrudan çekilemedi, proje bağlantısı üzerinden inceleyebilirsiniz."
+        return "Kod içeriği çekilemedi, bağlantı üzerinden inceleyebilirsiniz."
 
     def yazilim_modu_ara_ve_getir(self, sorgu_metni):
-        """GitHub API üzerinden en alakalı 2 repoyu ve kodlarını getirir"""
+        """Web Arama Analizi + GitHub API projelerini ve kodlarını sunar"""
         headers = {"Accept": "application/vnd.github.v3+json"}
         api_url = f"https://api.github.com/search/repositories?q={sorgu_metni}&sort=stars&order=desc&per_page=2"
         
         bulunan_repolar = []
         ilk_url_aciklamasi = "Arama analizi tamamlandı."
 
-        # Google'dan kısa özet analiz alma
-        google_ozet = self.google_web_ara(sorgu_metni, adet=1)
-        if google_ozet:
-            ilk_url_aciklamasi = google_ozet[0]["ozet"]
+        # Web araması ile özet analizi alma
+        web_ozet = self.saf_web_ara(sorgu_metni, adet=1)
+        if web_ozet:
+            ilk_url_aciklamasi = web_ozet[0]["ozet"]
 
-        # GitHub araması
+        # GitHub API ile repoları bulma
         try:
             res = requests.get(api_url, headers=headers, timeout=6)
             if res.status_code == 200:
@@ -128,7 +132,7 @@ class DinamikNLPMotoru:
             st.session_state.yazilim_modu = True
             return "HAN AI 2 Yazılım Modu { Gizli Mod Açıldı }"
 
-        # Mod Çıkış
+        # Mod Çıkış (İstediğin şekilde)
         if girdi_temiz in ["yazılım_exit", "yazilim_exit"]:
             st.session_state.yazilim_modu = False
             return "Normal Moda Geçildi."
@@ -146,10 +150,10 @@ class DinamikNLPMotoru:
         if set(kelimeler).intersection(selamlar):
             return "Merhaba! İyiyim, teşekkür ederim. Size nasıl yardımcı olabilirim?"
 
-        arama_sonuclari = self.google_web_ara(girdi, adet=3)
+        arama_sonuclari = self.saf_web_ara(girdi, adet=3)
         
         if arama_sonuclari:
-            cevap = "Google Arama verilerine dayanarak bulduğum sonuçlar:\n\n"
+            cevap = "Arama verilerine dayanarak bulduğum sonuçlar:\n\n"
             for i, item in enumerate(arama_sonuclari, 1):
                 cevap += f"**{i}. {item['baslik']}**\n"
                 cevap += f"{item['ozet']}\n"
