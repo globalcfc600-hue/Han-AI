@@ -25,27 +25,41 @@ class DinamikNLPMotoru:
         }
 
     def metin_temizle(self, metin):
-        metin = metin.lower()
-        metin = re.sub(r'[^\w\s]', '', metin)
-        tokens = metin.split()
-        temiz = [t for t in tokens if t not in self.durak_kelimeler]
-        return temiz if temiz else tokens
+        metin_alt = metin.lower()
+        temiz_metin = re.sub(r'[^\w\s]', '', metin_alt)
+        tokens = temiz_metin.split()
+        temiz_tokens = [t for t in tokens if t not in self.durak_kelimeler]
+        
+        # Eğer temizleme sonrası hiçbir şey kalmadıysa orijinal metni geri döndür
+        if temiz_tokens:
+            return " ".join(temiz_tokens)
+        return metin.strip()
 
     def canlı_google_ara(self, sorgu, adet=3):
         """Render IP engeline takılmayan Tavily AI Arama Motoru"""
-        url = "[https://api.tavily.com/search](https://api.tavily.com/search)"
+        url = "https://api.tavily.com/search"
         payload = {
             "api_key": TAVILY_API_KEY,
             "query": sorgu,
             "max_results": adet,
-            "search_depth": "basic"
+            "search_depth": "advanced",
+            "include_answer": True
         }
         sonuclar = []
 
         try:
-            res = requests.post(url, json=payload, timeout=6)
+            res = requests.post(url, json=payload, timeout=8)
             if res.status_code == 200:
                 data = res.json()
+                
+                # Eğer Tavily yapay zeka özeti/yanıtı ürettiyse önce onu ekle
+                if data.get("answer"):
+                    sonuclar.append({
+                        "baslik": "AI Analiz Özet Yanıtı",
+                        "url": "https://tavily.com",
+                        "ozet": data.get("answer")
+                    })
+
                 results = data.get("results", [])
                 for item in results:
                     sonuclar.append({
@@ -60,22 +74,31 @@ class DinamikNLPMotoru:
 
     def github_tum_kodlari_cek(self, repo_full_name):
         """GitHub API üzerinden reponun README/Kod içeriğini çeker"""
-        headers = {"Accept": "application/vnd.github.v3+json"}
-        url = f"[https://api.github.com/repos/](https://api.github.com/repos/){repo_full_name}/readme"
+        headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "HAN-AI-App"
+        }
+        url = f"https://api.github.com/repos/{repo_full_name}/readme"
         try:
-            res = requests.get(url, headers=headers, timeout=5)
+            res = requests.get(url, headers=headers, timeout=6)
             if res.status_code == 200:
                 content_b64 = res.json().get("content", "")
                 decoded = base64.b64decode(content_b64).decode("utf-8", errors="ignore")
-                return decoded
+                # Çok uzun README dosyalarını kesip ilk 3000 karakterini sunalım
+                return decoded[:3000] + ("...\n\n[Kod/İçerik Devamı GitHub Bağlantısında]" if len(decoded) > 3000 else "")
         except Exception:
             pass
-        return "Kod içeriği çekilemedi, bağlantı üzerinden inceleyebilirsiniz."
+        return "Kod içeriği doğrudan çekilemedi, detaylar için aşağıdaki GitHub bağlantısını ziyaret edebilirsiniz."
 
     def yazilim_modu_ara_ve_getir(self, sorgu_metni):
         """Web Arama Analizi + GitHub API projelerini ve kodlarını sunar"""
-        headers = {"Accept": "application/vnd.github.v3+json"}
-        api_url = f"[https://api.github.com/search/repositories?q=](https://api.github.com/search/repositories?q=){sorgu_metni}&sort=stars&order=desc&per_page=2"
+        headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "HAN-AI-App"
+        }
+        
+        # GitHub Arama Sorgusunu Hazırla
+        api_url = f"https://api.github.com/search/repositories?q={urllib_parse_quote(sorgu_metni)}+language:python&sort=stars&order=desc&per_page=2"
         
         bulunan_repolar = []
         ilk_url_aciklamasi = "Arama analizi tamamlandı."
@@ -111,7 +134,7 @@ class DinamikNLPMotoru:
                 cevap += f"**GitHub Bağlantısı:** [{repo_url}]({repo_url})\n"
                 cevap += f"**Proje Bütün Kodları & İçeriği:**\n```python\n{tum_kodlar}\n```\n\n---\n"
         else:
-            cevap += f"Maalesef '{sorgu_metni}' konusuyla ilgili uygun bir GitHub reposu bulunamadı."
+            cevap += f"Maalesef '{sorgu_metni}' konusuyla ilgili GitHub üzerinde doğrudan eşleşen bir proje bulunamadı."
 
         return cevap
 
@@ -130,15 +153,14 @@ class DinamikNLPMotoru:
 
         # YAZILIM MODU
         if st.session_state.yazilim_modu:
-            temiz_kelimeler = self.metin_temizle(girdi)
-            sorgu_metni = " ".join(temiz_kelimeler)
+            sorgu_metni = self.metin_temizle(girdi)
             return self.yazilim_modu_ara_ve_getir(sorgu_metni)
 
         # NORMAL SOHBET MODU
-        kelimeler = self.metin_temizle(girdi)
         selamlar = {"selam", "merhaba", "gunaydin", "iyi", "gunler", "naber", "nasilsin", "sa"}
+        girdi_kelimeler = set(girdi_temiz.split())
         
-        if set(kelimeler).intersection(selamlar):
+        if girdi_kelimeler.intersection(selamlar):
             return "Merhaba! İyiyim, teşekkür ederim. Size nasıl yardımcı olabilirim?"
 
         arama_sonuclari = self.canlı_google_ara(girdi, adet=3)
@@ -153,6 +175,9 @@ class DinamikNLPMotoru:
         else:
             return f"'{girdi}' sorgusu için canlı web araması üzerinden doğrudan sonuç çekilemedi."
 
+
+# URL Encode için yardımcı import eklemesi
+from urllib.parse import quote as urllib_parse_quote
 
 motor = DinamikNLPMotoru()
 
